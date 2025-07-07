@@ -7,8 +7,14 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { ArrowLeft, Phone, User, MapPin, Users, Clock, Bus, Navigation } from "lucide-react"
+import { ArrowLeft, Phone, User, MapPin, Users, Clock, Bus, Navigation, AlertTriangle } from "lucide-react"
 import Link from "next/link"
+import { useAuth } from '@/lib/auth-context'
+import { supabase } from '@/lib/supabase'
+import { BusTracker } from '@/components/ui/bus-tracker'
+import { StudentCount } from '@/components/ui/student-count'
+import type { Database } from '@/lib/supabase'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 
 const routeData = {
   "route-1": {
@@ -49,18 +55,32 @@ const shifts = {
   "shift-3": { name: "Shift III", startTime: "12:15 PM", departureTime: "05:30 PM" },
 }
 
+type Stop = {
+  id: number;
+  route_id: number;
+  name: string;
+  sequence_number: number;
+  created_at: string;
+};
+
 export default function TrackPage() {
   const params = useParams()
   const searchParams = useSearchParams()
   const routeId = params.routeId as string
   const shiftId = searchParams.get("shift") || "shift-1"
+  const { user } = useAuth()
+  const [isTracking, setIsTracking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [stops, setStops] = useState<Stop[]>([])
+  const [selectedStop, setSelectedStop] = useState<Stop | null>(null)
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'tracking' | 'error'>('idle')
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
   const route = routeData[routeId as keyof typeof routeData]
   const shift = shifts[shiftId as keyof typeof shifts]
 
   const [currentStopIndex, setCurrentStopIndex] = useState(1)
   const [studentCounts, setStudentCounts] = useState<{ [key: string]: number }>({})
-  const [selectedStop, setSelectedStop] = useState<string | null>(null)
   const [studentCount, setStudentCount] = useState("")
   const [isMoving, setIsMoving] = useState(true)
 
@@ -81,15 +101,105 @@ export default function TrackPage() {
     return () => clearInterval(interval)
   }, [isMoving, route.stops.length])
 
+  useEffect(() => {
+    let watchId: number
+    let updateInterval: NodeJS.Timeout
+
+    const updateLocation = async (position: GeolocationPosition) => {
+      try {
+        const { error } = await supabase
+          .from('bus_locations')
+          .upsert({
+            route_id: Number(routeId),
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            updated_at: new Date().toISOString(),
+          })
+
+        if (error) throw error
+        setLastUpdate(new Date())
+        setLocationStatus('tracking')
+      } catch (err) {
+        console.error('Error updating location:', err)
+        setError('Failed to update location')
+        setLocationStatus('error')
+      }
+    }
+
+    const startTracking = () => {
+      if (!navigator.geolocation) {
+        setError('Geolocation is not supported by your browser')
+        setLocationStatus('error')
+        return
+      }
+
+      // Watch for location changes
+      watchId = navigator.geolocation.watchPosition(
+        updateLocation,
+        (err) => {
+          console.error('Geolocation error:', err)
+          setError('Failed to get location')
+          setLocationStatus('error')
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0,
+        }
+      )
+
+      // Ensure we update at least every 5 seconds even if location hasn't changed
+      updateInterval = setInterval(() => {
+        navigator.geolocation.getCurrentPosition(updateLocation)
+      }, 5000)
+    }
+
+    if (isTracking) {
+      startTracking()
+    } else {
+      setLocationStatus('idle')
+    }
+
+    return () => {
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId)
+      }
+      if (updateInterval) {
+        clearInterval(updateInterval)
+      }
+    }
+  }, [isTracking, routeId])
+
+  useEffect(() => {
+    const fetchStops = async () => {
+      const { data: stopsData } = await supabase
+        .from('stops')
+        .select('*')
+        .eq('route_id', routeId)
+        .order('sequence_number')
+
+      if (stopsData) {
+        setStops(stopsData as Stop[])
+      }
+    }
+
+    fetchStops()
+  }, [routeId])
+
   const handleStudentCountSubmit = () => {
     if (selectedStop && studentCount) {
       setStudentCounts((prev) => ({
         ...prev,
-        [selectedStop]: Number.parseInt(studentCount),
+        [selectedStop.name]: Number.parseInt(studentCount),
       }))
       setSelectedStop(null)
       setStudentCount("")
     }
+  }
+
+  const toggleTracking = () => {
+    setIsTracking(!isTracking)
+    setError(null)
   }
 
   if (!route) {
@@ -312,7 +422,79 @@ export default function TrackPage() {
             </div>
           </CardContent>
         </Card>
+
+        {user?.role === 'driver' && (
+          <Card className="p-4">
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Driver Controls</h3>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4" />
+                      <span>Location Status: </span>
+                      <span className={`font-medium ${
+                        locationStatus === 'tracking' ? 'text-green-500' :
+                        locationStatus === 'error' ? 'text-red-500' :
+                        'text-gray-500'
+                      }`}>
+                        {locationStatus === 'tracking' ? 'Active' :
+                         locationStatus === 'error' ? 'Error' :
+                         'Inactive'}
+                      </span>
+                    </div>
+                    {lastUpdate && (
+                      <div className="text-sm text-gray-500">
+                        Last update: {lastUpdate.toLocaleTimeString()}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    onClick={toggleTracking}
+                    variant={isTracking ? 'destructive' : 'default'}
+                    className="min-w-[120px]"
+                  >
+                    {isTracking ? 'Stop Tracking' : 'Start Tracking'}
+                  </Button>
+                </div>
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {user?.role === 'student' && (
+          <div className="space-y-4">
+            <Card className="p-4">
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Select Your Stop</h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {stops.map((stop) => (
+                    <Button
+                      key={stop.id}
+                      variant={selectedStop?.id === stop.id ? 'default' : 'outline'}
+                      onClick={() => setSelectedStop(stop)}
+                    >
+                      {stop.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </Card>
+
+            {selectedStop && (
+              <StudentCount stop={selectedStop} />
+            )}
+          </div>
+        )}
       </div>
+
+      <BusTracker routeId={Number(routeId)} />
     </div>
   )
 }
