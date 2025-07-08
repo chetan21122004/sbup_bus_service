@@ -9,19 +9,26 @@ export type Database = {
   users: {
     id: number;
     email: string;
-    role: 'student' | 'driver';
+    password: string;
+    role: 'student' | 'driver' | 'admin';
     name: string;
+    driver_number?: string;
     created_at: string;
+    active_route_id?: number | null;
   };
   routes: {
     id: number;
     name: string;
     shift_number: 1 | 2 | 3;
+    shift_timing?: string;
     start_time: string;
     departure_time: string;
     vehicle_number: string;
-    driver_id: number;
+    driver_id: number | null;
+    driver_name?: string;
+    driver_mobile?: string;
     created_at: string;
+    status: 'inactive' | 'active' | 'completed';
   };
   stops: {
     id: number;
@@ -36,6 +43,8 @@ export type Database = {
     latitude: number;
     longitude: number;
     updated_at: string;
+    current_stop_id?: number | null;
+    last_updated?: string;
   };
   student_counts: {
     id: number;

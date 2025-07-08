@@ -3,36 +3,76 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { supabase } from './supabase';
 import type { Database } from './supabase';
 
-type User = Database['users'] & { password?: never };
+type User = {
+  id: number;
+  email: string;
+  name: string;
+  role: 'student' | 'driver' | 'admin';
+  driver_number?: string;
+};
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signup: (email: string, password: string, name: string, role: 'student' | 'driver') => Promise<{ error: Error | null }>;
+  signup: (data: { email: string; password: string; name: string; role: 'student' | 'driver' | 'admin'; driver_number?: string }) => Promise<{ error: Error | null }>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Helper function to safely access localStorage
+const getLocalStorage = (key: string): string | null => {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem(key);
+  }
+  return null;
+};
+
+// Helper function to safely set localStorage
+const setLocalStorage = (key: string, value: string): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(key, value);
+  }
+};
+
+// Helper function to safely remove from localStorage
+const removeLocalStorage = (key: string): void => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(key);
+  }
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Load user from localStorage on mount
   useEffect(() => {
-    // Check for stored user data
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setLoading(false);
+    const loadUser = () => {
+      try {
+        const storedUser = getLocalStorage('sbup_user');
+        if (storedUser) {
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
+        }
+      } catch (error) {
+        console.error('Error loading user from localStorage:', error);
+        // If there's an error parsing the stored user, clear it
+        removeLocalStorage('sbup_user');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUser();
   }, []);
 
   const login = async (email: string, password: string) => {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select()
+        .select('*')
         .eq('email', email)
         .eq('password', password)
         .single();
@@ -40,9 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
       if (!data) throw new Error('Invalid credentials');
 
-      const { password: _, ...userWithoutPassword } = data;
-      setUser(userWithoutPassword);
-      localStorage.setItem('user', JSON.stringify(userWithoutPassword));
+      setUser(data);
+      setLocalStorage('sbup_user', JSON.stringify(data));
       
       return { error: null };
     } catch (error) {
@@ -50,7 +89,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const signup = async (email: string, password: string, name: string, role: 'student' | 'driver') => {
+  const signup = async ({ email, password, name, role, driver_number }: { 
+    email: string; 
+    password: string; 
+    name: string; 
+    role: 'student' | 'driver' | 'admin';
+    driver_number?: string;
+  }) => {
     try {
       // Check if email already exists
       const { data: existingUser } = await supabase
@@ -72,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             password,
             name,
             role,
+            driver_number: role === 'driver' ? driver_number : null,
           },
         ])
         .select()
@@ -79,10 +125,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (error) throw error;
 
-      const { password: _, ...userWithoutPassword } = data;
-      setUser(userWithoutPassword);
-      localStorage.setItem('user', JSON.stringify(userWithoutPassword));
-
+      setUser(data);
+      setLocalStorage('sbup_user', JSON.stringify(data));
+      
       return { error: null };
     } catch (error) {
       return { error: error as Error };
@@ -91,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     setUser(null);
-    localStorage.removeItem('user');
+    removeLocalStorage('sbup_user');
   };
 
   return (

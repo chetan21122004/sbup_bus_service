@@ -1,71 +1,126 @@
-import { useState } from 'react';
+'use client';
+
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Card, CardContent, CardHeader, CardTitle } from './card';
 import { Button } from './button';
-import { Input } from './input';
-import { Label } from './label';
+import { Users } from 'lucide-react';
+import { Badge } from './badge';
+import { toast } from './use-toast';
 import type { Database } from '@/lib/supabase';
 
-type Stop = Database['stops'];
-
 interface StudentCountProps {
-  stop: Stop;
+  stopId: number;
 }
 
-export function StudentCount({ stop }: StudentCountProps) {
-  const [count, setCount] = useState(0);
+export function StudentCount({ stopId }: StudentCountProps) {
+  const [count, setCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [showInput, setShowInput] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Fetch current count when component mounts
+  useEffect(() => {
+    const fetchCount = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('student_counts')
+          .select('count')
+          .eq('stop_id', stopId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error fetching student count:', error);
+        } else if (data) {
+          setCount(data.count);
+        }
+      } catch (error) {
+        console.error('Error fetching student count:', error);
+      }
+    };
+
+    fetchCount();
+  }, [stopId]);
+
+  // Update student count
+  const updateCount = async (newCount: number) => {
+    if (newCount < 0) return;
+    
     setLoading(true);
-    setError(null);
-
     try {
       const { error } = await supabase
         .from('student_counts')
         .insert({
-          stop_id: stop.id,
-          count: count,
+          stop_id: stopId,
+          count: newCount,
         });
 
       if (error) throw error;
-      setCount(0);
-    } catch (err) {
-      console.error('Error updating student count:', err);
-      setError('Failed to update student count');
+      
+      setCount(newCount);
+      setShowInput(false);
+      toast({
+        title: 'Count Updated',
+        description: `Student count at this stop updated to ${newCount}`,
+      });
+    } catch (error) {
+      console.error('Error updating student count:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to update student count',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  if (showInput) {
+    return (
+      <div className="flex items-center space-x-1">
+        <Button 
+          variant="outline" 
+          size="icon" 
+          className="h-6 w-6"
+          disabled={loading}
+          onClick={() => updateCount(Math.max(0, (count || 0) - 1))}
+        >
+          -
+        </Button>
+        <Badge variant="outline" className="px-2 py-0">
+          {count || 0}
+        </Badge>
+        <Button 
+          variant="outline" 
+          size="icon" 
+          className="h-6 w-6"
+          disabled={loading}
+          onClick={() => updateCount((count || 0) + 1)}
+        >
+          +
+        </Button>
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          className="h-6 w-6 text-gray-400"
+          disabled={loading}
+          onClick={() => setShowInput(false)}
+        >
+          ✓
+        </Button>
+      </div>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Update Student Count</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="count">Number of Students at {stop.name}</Label>
-            <Input
-              id="count"
-              type="number"
-              min="0"
-              value={count}
-              onChange={(e) => setCount(parseInt(e.target.value) || 0)}
-              required
-            />
-          </div>
-          {error && (
-            <p className="text-sm text-red-500">{error}</p>
-          )}
-          <Button type="submit" disabled={loading}>
-            {loading ? 'Updating...' : 'Update Count'}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-6 px-2 text-xs"
+      onClick={() => setShowInput(true)}
+    >
+      <Users className="h-3 w-3 mr-1" />
+      {count !== null ? count : '0'}
+    </Button>
   );
 } 

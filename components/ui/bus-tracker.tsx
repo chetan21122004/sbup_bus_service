@@ -1,9 +1,14 @@
+'use client';
+
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { Database } from '@/lib/supabase';
 import { Card } from './card';
 import { Progress } from './progress';
+import { Badge } from './badge';
+import { Bus, Clock, MapPin } from 'lucide-react';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import { StudentCount } from './student-count';
 
 interface Stop {
   id: number;
@@ -11,12 +16,29 @@ interface Stop {
   name: string;
   sequence_number: number;
   created_at: string;
-  latitude: number;
-  longitude: number;
 }
 
-type BusLocation = Database['bus_locations'];
-type Route = Database['routes'];
+interface BusLocation {
+  id: number;
+  route_id: number;
+  latitude: number;
+  longitude: number;
+  updated_at: string;
+  current_stop_id?: number | null;
+  last_updated?: string;
+}
+
+interface Route {
+  id: number;
+  name: string;
+  shift_number: 1 | 2 | 3;
+  start_time: string;
+  departure_time: string;
+  vehicle_number: string;
+  driver_id: number | null;
+  created_at: string;
+  status?: 'inactive' | 'active' | 'completed';
+}
 
 interface BusTrackerProps {
   routeId: number;
@@ -27,27 +49,57 @@ export function BusTracker({ routeId }: BusTrackerProps) {
   const [currentLocation, setCurrentLocation] = useState<BusLocation | null>(null);
   const [route, setRoute] = useState<Route | null>(null);
   const [loading, setLoading] = useState(true);
+  const [driver, setDriver] = useState<{ name: string; driver_number: string } | null>(null);
+  const [currentStopId, setCurrentStopId] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchRouteData = async () => {
       try {
-        // Fetch route details
-        const { data: routeData } = await supabase
+        // Fetch route details with driver info
+        const { data: routeData, error: routeError } = await supabase
           .from('routes')
-          .select('*')
+          .select(`
+            *,
+            driver:driver_id (
+              name,
+              driver_number
+            )
+          `)
           .eq('id', routeId)
           .single();
 
-        if (routeData) setRoute(routeData);
+        if (routeError) throw routeError;
+        
+        if (routeData) {
+          setRoute(routeData as Route);
+          if (routeData.driver) {
+            setDriver(routeData.driver as { name: string; driver_number: string });
+          }
+        }
 
         // Fetch stops for the route
-        const { data: stopsData } = await supabase
+        const { data: stopsData, error: stopsError } = await supabase
           .from('stops')
           .select('*')
           .eq('route_id', routeId)
           .order('sequence_number');
 
-        if (stopsData) setStops(stopsData as Stop[]);
+        if (stopsError) throw stopsError;
+        if (stopsData) setStops(stopsData);
+
+        // Fetch current bus location
+        const { data: locationData, error: locationError } = await supabase
+          .from('bus_locations')
+          .select('*')
+          .eq('route_id', routeId)
+          .single();
+
+        if (locationError && locationError.code !== 'PGRST116') throw locationError;
+        
+        if (locationData) {
+          setCurrentLocation(locationData as BusLocation);
+          setCurrentStopId(locationData.current_stop_id || null);
+        }
 
         // Subscribe to real-time bus location updates
         const subscription = supabase
@@ -61,7 +113,9 @@ export function BusTracker({ routeId }: BusTrackerProps) {
               filter: `route_id=eq.${routeId}`,
             },
             (payload: RealtimePostgresChangesPayload<BusLocation>) => {
-              setCurrentLocation(payload.new as BusLocation);
+              const newLocation = payload.new as BusLocation;
+              setCurrentLocation(newLocation);
+              setCurrentStopId(newLocation.current_stop_id || null);
             }
           )
           .subscribe();
@@ -81,68 +135,148 @@ export function BusTracker({ routeId }: BusTrackerProps) {
   }, [routeId]);
 
   if (loading) {
-    return <div>Loading...</div>;
+    return (
+      <Card className="p-6">
+        <div className="flex justify-center items-center h-40">
+          <p>Loading bus tracker...</p>
+        </div>
+      </Card>
+    );
   }
 
+  // Calculate progress based on current stop
   const calculateProgress = () => {
-    if (!currentLocation || stops.length === 0) return 0;
+    if (!currentStopId || stops.length === 0) return 0;
     
-    // Find the last passed stop based on GPS coordinates
-    // This is a simplified calculation - you might want to use a more sophisticated
-    // algorithm based on your specific needs
-    const passedStops = stops.filter((stop, index) => {
-      if (index === 0) return true;
-      const prevStop = stops[index - 1];
-      return (
-        currentLocation.latitude >= Math.min(prevStop.latitude, stop.latitude) &&
-        currentLocation.latitude <= Math.max(prevStop.latitude, stop.latitude) &&
-        currentLocation.longitude >= Math.min(prevStop.longitude, stop.longitude) &&
-        currentLocation.longitude <= Math.max(prevStop.longitude, stop.longitude)
-      );
-    });
-
-    return (passedStops.length / stops.length) * 100;
+    const currentStopIndex = stops.findIndex(stop => stop.id === currentStopId);
+    if (currentStopIndex === -1) return 0;
+    
+    return ((currentStopIndex + 1) / stops.length) * 100;
   };
 
+  const getNextStop = () => {
+    if (!currentStopId || stops.length === 0) return null;
+    
+    const currentStopIndex = stops.findIndex(stop => stop.id === currentStopId);
+    if (currentStopIndex === -1 || currentStopIndex >= stops.length - 1) return null;
+    
+    return stops[currentStopIndex + 1];
+  };
+
+  const nextStop = getNextStop();
+  const progress = calculateProgress();
+
   return (
-    <Card className="p-6">
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-semibold">
-            Route: {route?.name}
-          </h3>
-          <p className="text-sm text-gray-500">
-            Shift {route?.shift_number} - Vehicle: {route?.vehicle_number}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm text-gray-500">
-            <span>{stops[0]?.name}</span>
-            <span>{stops[stops.length - 1]?.name}</span>
-          </div>
-          <Progress value={calculateProgress()} className="h-2" />
-        </div>
-
-        <div className="space-y-2">
-          <h4 className="font-medium">Stops:</h4>
-          <div className="space-y-1">
-            {stops.map((stop) => (
-              <div
-                key={stop.id}
-                className="flex items-center space-x-2"
-              >
-                <div className={`w-2 h-2 rounded-full ${
-                  calculateProgress() >= (stop.sequence_number / stops.length) * 100
-                    ? 'bg-green-500'
-                    : 'bg-gray-300'
-                }`} />
-                <span className="text-sm">{stop.name}</span>
+    <div className="space-y-6">
+      <Card className="p-6">
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Bus className="h-5 w-5 text-primary" />
+              Route: {route?.name}
+            </h3>
+            <p className="text-sm text-gray-500">
+              Shift {route?.shift_number} - Vehicle: {route?.vehicle_number}
+            </p>
+            {driver && (
+              <div className="mt-2 text-sm">
+                <p>Driver: {driver.name}</p>
+                <p>Contact: {driver.driver_number}</p>
               </div>
-            ))}
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm text-gray-500">
+              <span>{stops[0]?.name}</span>
+              <span>{stops[stops.length - 1]?.name}</span>
+            </div>
+            <Progress value={progress} className="h-2" />
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium flex items-center gap-1">
+                <MapPin className="h-4 w-4" /> Current Location
+              </h4>
+              {route?.status === 'active' ? (
+                <Badge variant="default">Active</Badge>
+              ) : (
+                <Badge variant="outline">Inactive</Badge>
+              )}
+            </div>
+            
+            <div className="bg-muted p-3 rounded-md">
+              {currentStopId ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium">Current Stop:</span>
+                    <Badge variant="secondary">
+                      {stops.find(s => s.id === currentStopId)?.name || 'Unknown'}
+                    </Badge>
+                  </div>
+                  
+                  {nextStop && (
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium">Next Stop:</span>
+                      <Badge variant="outline">{nextStop.name}</Badge>
+                    </div>
+                  )}
+                  
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium">Last Updated:</span>
+                    <span className="text-xs">
+                      {currentLocation?.last_updated 
+                        ? new Date(currentLocation.last_updated).toLocaleTimeString() 
+                        : currentLocation?.updated_at
+                          ? new Date(currentLocation.updated_at).toLocaleTimeString()
+                          : 'Unknown'}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-center text-sm text-gray-500">
+                  Bus tracking not active yet
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="font-medium flex items-center gap-1">
+              <Clock className="h-4 w-4" /> Stops
+            </h4>
+            <div className="space-y-1">
+              {stops.map((stop) => {
+                const isCurrentStop = stop.id === currentStopId;
+                const isPastStop = stops.findIndex(s => s.id === stop.id) < stops.findIndex(s => s.id === currentStopId);
+                
+                return (
+                  <div
+                    key={stop.id}
+                    className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <div className={`w-3 h-3 rounded-full ${
+                        isCurrentStop
+                          ? 'bg-primary animate-pulse'
+                          : isPastStop
+                            ? 'bg-green-500'
+                            : 'bg-gray-300'
+                      }`} />
+                      <span className={`text-sm ${isCurrentStop ? 'font-medium' : ''}`}>
+                        {stop.name}
+                      </span>
+                    </div>
+                    
+                    <StudentCount stopId={stop.id} />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </div>
   );
 } 
