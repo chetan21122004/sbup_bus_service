@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -21,6 +21,8 @@ type Stop = {
   sequence_number: number;
   route_id: number;
   pickup_time?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 export function DriverDashboard() {
@@ -36,6 +38,9 @@ export function DriverDashboard() {
   const [isTracking, setIsTracking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<{latitude: number, longitude: number} | null>(null);
+  const locationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const checkStopProximityRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch all shifts on mount
   useEffect(() => {
@@ -73,15 +78,6 @@ export function DriverDashboard() {
       if (!user || user.role !== 'driver') return;
 
       try {
-        // Get all available routes
-        const { data: allRoutes, error: routesError } = await supabase
-          .from('routes')
-          .select('*')
-          .order('name');
-
-        if (routesError) throw routesError;
-        setRoutes(allRoutes || []);
-
         // Check if driver has an active route
         const { data: userData, error: userError } = await supabase
           .from('users')
@@ -101,12 +97,14 @@ export function DriverDashboard() {
           if (activeRouteError) throw activeRouteError;
           setActiveRoute(activeRouteData);
           setSelectedRoute(activeRouteData);
+          setSelectedShift(activeRouteData.shift_number);
 
           // If route is active, fetch stops and current location
           if (activeRouteData.status === 'active') {
             setIsTracking(true);
             await fetchStops(activeRouteData.id);
             await fetchCurrentLocation(activeRouteData.id);
+            startLocationUpdates();
           }
         }
       } catch (error) {
@@ -123,7 +121,24 @@ export function DriverDashboard() {
     };
 
     fetchDriverData();
+
+    // Clean up intervals on unmount
+    return () => {
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current);
+      }
+      if (checkStopProximityRef.current) {
+        clearInterval(checkStopProximityRef.current);
+      }
+    };
   }, [user]);
+
+  // Fetch stops when route is selected
+  useEffect(() => {
+    if (selectedRoute && !isTracking) {
+      fetchStops(selectedRoute.id);
+    }
+  }, [selectedRoute]);
 
   // Fetch stops for a route
   const fetchStops = async (routeId: number) => {
@@ -213,7 +228,10 @@ export function DriverDashboard() {
 
   // Start tracking
   const startTracking = async () => {
-    if (!selectedRoute || !user) return;
+    if (!selectedRoute || !selectedShift || !user) {
+      setError("Please select both shift and route before starting the trip");
+      return;
+    }
 
     try {
       setLoading(true);
@@ -271,6 +289,7 @@ export function DriverDashboard() {
         navigator.geolocation.getCurrentPosition(
           async (position) => {
             const { latitude, longitude } = position.coords;
+            setCurrentPosition({ latitude, longitude });
             
             // Create or update bus location
             const { error: locationError } = await supabase
@@ -319,18 +338,59 @@ export function DriverDashboard() {
     }
   };
 
+  // Calculate distance between two points in km
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // Radius of the Earth in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distance = R * c; // Distance in km
+    return distance;
+  };
+
+  // Check if driver is near a stop
+  const checkStopProximity = () => {
+    if (!currentPosition || !nextStop || !nextStop.latitude || !nextStop.longitude) return;
+    
+    const distance = calculateDistance(
+      currentPosition.latitude, 
+      currentPosition.longitude, 
+      nextStop.latitude, 
+      nextStop.longitude
+    );
+    
+    // If within 100 meters of the next stop
+    if (distance <= 0.1) {
+      moveToNextStop();
+    }
+  };
+
   // Update location periodically
   const startLocationUpdates = () => {
+    // Clear any existing intervals
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+    }
+    if (checkStopProximityRef.current) {
+      clearInterval(checkStopProximityRef.current);
+    }
+
     // Start periodic location updates
-    const locationInterval = setInterval(() => {
+    locationIntervalRef.current = setInterval(() => {
       if (!isTracking || !selectedRoute) {
-        clearInterval(locationInterval);
+        if (locationIntervalRef.current) clearInterval(locationIntervalRef.current);
+        if (checkStopProximityRef.current) clearInterval(checkStopProximityRef.current);
         return;
       }
 
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
+          setCurrentPosition({ latitude, longitude });
           
           try {
             // Update bus location
@@ -351,10 +411,10 @@ export function DriverDashboard() {
           console.error('Geolocation error:', error);
         }
       );
-    }, 10000); // Update every 10 seconds
+    }, 5000); // Update every 5 seconds
 
-    // Clean up on unmount
-    return () => clearInterval(locationInterval);
+    // Check proximity to stops
+    checkStopProximityRef.current = setInterval(checkStopProximity, 10000); // Check every 10 seconds
   };
 
   // Move to next stop
@@ -366,7 +426,11 @@ export function DriverDashboard() {
       
       // Find the stop after next
       const nextStopIndex = stops.findIndex(stop => stop.id === nextStop.id);
-      if (nextStopIndex < stops.length - 1) {
+      
+      // Check if this is the last stop (SBUP Campus)
+      const isFinalStop = nextStop.name === "SBUP Campus" || nextStopIndex === stops.length - 1;
+      
+      if (nextStopIndex < stops.length - 1 && !isFinalStop) {
         setNextStop(stops[nextStopIndex + 1]);
       } else {
         setNextStop(null);
@@ -391,6 +455,11 @@ export function DriverDashboard() {
             title: 'Arrived',
             description: `Bus arrived at ${nextStop.name}`,
           });
+          
+          // If this is the final stop (SBUP Campus), end the trip automatically
+          if (isFinalStop) {
+            await endTrip();
+          }
         }
       );
     } catch (error) {
@@ -425,6 +494,16 @@ export function DriverDashboard() {
         .eq('id', user?.id);
 
       if (userError) throw userError;
+
+      // Clear intervals
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current);
+        locationIntervalRef.current = null;
+      }
+      if (checkStopProximityRef.current) {
+        clearInterval(checkStopProximityRef.current);
+        checkStopProximityRef.current = null;
+      }
 
       setActiveRoute(null);
       setIsTracking(false);
@@ -487,15 +566,28 @@ export function DriverDashboard() {
             </Alert>
           )}
 
+          {!isTracking && (
+            <div className="bg-muted p-3 rounded-lg mb-2">
+              <h3 className="text-sm font-medium mb-2">Start a New Trip:</h3>
+              <ol className="list-decimal list-inside text-xs space-y-1 text-gray-600">
+                <li>Select your shift</li>
+                <li>Select your route</li>
+                <li>Click "Start Trip" button</li>
+              </ol>
+            </div>
+          )}
+
           {/* Shift selector */}
           <div className="space-y-2">
-            <label className="text-xs sm:text-sm font-medium">Select Shift</label>
+            <label className="text-xs sm:text-sm font-medium">1. Select Shift</label>
             <Select
               value={selectedShift?.toString() || ''}
               onValueChange={(value) => {
                 setSelectedShift(Number(value));
+                setSelectedRoute(null); // Reset route selection when shift changes
                 setError(null);
               }}
+              disabled={isTracking} // Only disable when tracking is active
             >
               <SelectTrigger className="w-full h-12 text-base rounded-lg">
                 <SelectValue placeholder="Select a shift" />
@@ -512,7 +604,7 @@ export function DriverDashboard() {
 
           {/* Route selector */}
           <div className="space-y-2">
-            <label className="text-xs sm:text-sm font-medium">Select Route</label>
+            <label className="text-xs sm:text-sm font-medium">2. Select Route</label>
             <Select
               value={selectedRoute?.id.toString() || ''}
               onValueChange={(value) => {
@@ -520,9 +612,9 @@ export function DriverDashboard() {
                 setSelectedRoute(route || null);
                 setError(null);
               }}
-              disabled={selectedShift == null}
+              disabled={selectedShift == null || isTracking} // Only disable when no shift selected or tracking is active
             >
-              <SelectTrigger className="w-full h-12 text-base rounded-lg" disabled={selectedShift == null}>
+              <SelectTrigger className="w-full h-12 text-base rounded-lg">
                 <SelectValue placeholder={selectedShift == null ? 'Select a shift first' : 'Select a route'} />
               </SelectTrigger>
               <SelectContent>
@@ -536,13 +628,13 @@ export function DriverDashboard() {
           </div>
 
           {/* Start Trip button */}
-          {!isTracking && selectedRoute && (
+          {!isTracking && (
             <Button
               className="w-full h-12 text-base rounded-lg bg-primary text-white mt-2"
               onClick={startTracking}
-              disabled={loading}
+              disabled={loading || !selectedRoute || !selectedShift}
             >
-              <Bus className="mr-2 h-5 w-5" /> Start Trip
+              <Bus className="mr-2 h-5 w-5" /> 3. Start Trip
             </Button>
           )}
 
@@ -566,24 +658,133 @@ export function DriverDashboard() {
             </div>
           )}
 
-          <div className="space-y-2">
-            <h4 className="font-medium text-base">Stops</h4>
-            <div className="overflow-x-auto min-w-[320px] space-y-1">
-              {stops.map((stop, idx) => (
-                <div key={stop.id} className={`flex items-center justify-between py-2 border-b border-gray-100 last:border-0 ${currentStop?.id === stop.id ? 'bg-primary/10 dark:bg-primary/20 rounded-lg' : ''}`}>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm sm:text-base font-medium">{stop.name}</span>
-                    {stop.pickup_time && (
-                      <span className="ml-2 text-xs text-gray-500">{stop.pickup_time}</span>
+          {/* Train-like route visualization */}
+          {selectedRoute && stops.length > 0 && (
+            <div className="mt-6">
+              <h4 className="font-medium text-base mb-3">Route Map</h4>
+              <div className="relative py-4 px-2">
+                {/* Horizontal line representing the route */}
+                <div className="absolute top-1/2 left-0 right-0 h-1 bg-gray-300 transform -translate-y-1/2"></div>
+                
+                {/* Stops as circles on the line */}
+                <div className="flex justify-between relative">
+                  {stops.map((stop, idx) => (
+                    <div key={stop.id} className="flex flex-col items-center">
+                      <div 
+                        className={`w-5 h-5 rounded-full flex items-center justify-center z-10 ${
+                          currentStop?.id === stop.id 
+                            ? 'bg-primary border-2 border-white' 
+                            : idx < (stops.findIndex(s => s.id === currentStop?.id) || 0)
+                            ? 'bg-green-500' 
+                            : nextStop?.id === stop.id
+                            ? 'bg-amber-500'
+                            : 'bg-gray-300'
+                        }`}
+                      ></div>
+                      
+                      {/* Stop name below the circle */}
+                      <div className={`text-[10px] sm:text-xs mt-1 max-w-[60px] text-center ${
+                        currentStop?.id === stop.id ? 'font-bold' : ''
+                      }`}>
+                        {stop.name}
+                      </div>
+                      
+                      {/* Bus icon at current position */}
+                      {currentStop?.id === stop.id && (
+                        <div className="absolute -top-6">
+                          <Bus className="h-5 w-5 text-primary" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Stops list */}
+          {selectedRoute && stops.length > 0 && (
+            <div className="space-y-2 mt-4">
+              <h4 className="font-medium text-base">Stops</h4>
+              <div className="overflow-x-auto min-w-[320px] space-y-1">
+                {stops.map((stop, idx) => (
+                  <div key={stop.id} className={`flex items-center justify-between py-2 px-3 border-b border-gray-100 last:border-0 ${currentStop?.id === stop.id ? 'bg-primary/10 dark:bg-primary/20 rounded-lg' : ''}`}>
+                    <div className="flex items-center space-x-2">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                        currentStop?.id === stop.id 
+                          ? 'bg-primary text-white' 
+                          : nextStop?.id === stop.id
+                          ? 'bg-amber-500 text-white'
+                          : idx < (stops.findIndex(s => s.id === currentStop?.id) || 0)
+                          ? 'bg-green-500 text-white'
+                          : 'bg-gray-200 text-gray-500'
+                      }`}>
+                        {idx + 1}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-sm sm:text-base font-medium">{stop.name}</span>
+                        {stop.pickup_time && (
+                          <span className="text-xs text-gray-500">Pickup: {stop.pickup_time}</span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {isTracking && currentStop?.id === stop.id && nextStop && (
+                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                        Current Stop
+                      </Badge>
+                    )}
+                    
+                    {isTracking && nextStop?.id === stop.id && (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                        Next Stop
+                      </Badge>
+                    )}
+                    
+                    {isTracking && idx < (stops.findIndex(s => s.id === currentStop?.id) || 0) && (
+                      <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                        Completed
+                      </Badge>
                     )}
                   </div>
-                  {/* ...existing controls... */}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Controls for tracking, next stop, etc. would go here, styled for mobile */}
+          {/* Current stop info */}
+          {isTracking && currentStop && (
+            <div className="mt-4 space-y-2">
+              <div className="bg-muted p-3 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium">Current Stop:</p>
+                    <p className="text-base">{currentStop.name}</p>
+                  </div>
+                  {nextStop && (
+                    <div className="text-right">
+                      <p className="text-sm font-medium">Next Stop:</p>
+                      <p className="text-base">{nextStop.name}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Manual controls for testing */}
+              <div className="flex justify-end">
+                {nextStop && (
+                  <Button 
+                    size="sm"
+                    variant="outline"
+                    onClick={moveToNextStop}
+                    className="text-xs"
+                  >
+                    <MapPin className="h-3.5 w-3.5 mr-1" /> Mark Arrival (Manual)
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

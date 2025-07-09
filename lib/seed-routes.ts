@@ -2,7 +2,7 @@
 
 import { supabase } from './supabase';
 import { routesData } from './routes-data';
-import { stopsData } from './stops-data';
+import { stopsData, shiftTimings } from './stops-data';
 
 export async function seedRoutes() {
   try {
@@ -40,22 +40,54 @@ export async function seedRoutes() {
       throw insertError;
     }
     
-    // Insert stops for each route
+    // Insert stops for each route and shift
     for (const routeName in stopsData) {
-      const { data: route, error: routeError } = await supabase
+      // Get all routes with this name across different shifts
+      const { data: routes, error: routesError } = await supabase
         .from('routes')
-        .select('id')
-        .eq('name', routeName)
-        .single();
-      if (routeError) throw routeError;
-      const stops = stopsData[routeName];
-      for (const stop of stops) {
-        await supabase.from('stops').insert({
-          route_id: route.id,
-          name: stop.name,
-          sequence_number: stop.sequence_number,
-          pickup_time: stop.pickup_time
-        });
+        .select('id, shift_number')
+        .eq('name', routeName);
+      
+      if (routesError) throw routesError;
+      
+      if (routes && routes.length > 0) {
+        // For each route (across different shifts)
+        for (const route of routes) {
+          const stops = stopsData[routeName];
+          const shiftNumber = route.shift_number;
+          
+          // Insert stops with shift-specific timing adjustments if available
+          for (const stop of stops) {
+            let pickup_time = stop.pickup_time;
+            
+            // Apply shift-specific timing if available
+            if (shiftNumber > 1 && shiftTimings[shiftNumber]) {
+              if (shiftTimings[shiftNumber][stop.name]) {
+                pickup_time = shiftTimings[shiftNumber][stop.name];
+              } else if (shiftTimings[shiftNumber][routeName]) {
+                // Adjust first stop time based on route start time
+                if (stop.sequence_number === 1) {
+                  pickup_time = shiftTimings[shiftNumber][routeName];
+                }
+              }
+              
+              // Adjust final stop time if specified
+              if (stop.name === "SBUP Campus" && shiftTimings[shiftNumber]["SBUP Campus"]) {
+                pickup_time = shiftTimings[shiftNumber]["SBUP Campus"];
+              }
+            }
+            
+            // Insert the stop with appropriate timing and coordinates
+            await supabase.from('stops').insert({
+              route_id: route.id,
+              name: stop.name,
+              sequence_number: stop.sequence_number,
+              pickup_time: pickup_time,
+              latitude: stop.latitude,
+              longitude: stop.longitude
+            });
+          }
+        }
       }
     }
     
