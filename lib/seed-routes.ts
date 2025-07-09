@@ -2,6 +2,7 @@
 
 import { supabase } from './supabase';
 import { routesData } from './routes-data';
+import { stopsData } from './stops-data';
 
 export async function seedRoutes() {
   try {
@@ -37,6 +38,25 @@ export async function seedRoutes() {
     
     if (insertError) {
       throw insertError;
+    }
+    
+    // Insert stops for each route
+    for (const routeName in stopsData) {
+      const { data: route, error: routeError } = await supabase
+        .from('routes')
+        .select('id')
+        .eq('name', routeName)
+        .single();
+      if (routeError) throw routeError;
+      const stops = stopsData[routeName];
+      for (const stop of stops) {
+        await supabase.from('stops').insert({
+          route_id: route.id,
+          name: stop.name,
+          sequence_number: stop.sequence_number,
+          pickup_time: stop.pickup_time
+        });
+      }
     }
     
     return { success: true, message: 'Routes seeded successfully' };

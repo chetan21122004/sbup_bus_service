@@ -15,6 +15,7 @@ interface Stop {
   route_id: number;
   name: string;
   sequence_number: number;
+  pickup_time?: string;
   created_at: string;
 }
 
@@ -167,19 +168,19 @@ export function BusTracker({ routeId }: BusTrackerProps) {
   const progress = calculateProgress();
 
   return (
-    <div className="space-y-6">
-      <Card className="p-6">
-        <div className="space-y-6">
-          <div>
-            <h3 className="text-lg font-semibold flex items-center gap-2">
+    <div className="w-full max-w-full px-2 py-4 mx-auto space-y-4">
+      <Card className="p-4 sm:p-6">
+        <div className="space-y-4">
+          <div className="sticky top-0 z-10 bg-white dark:bg-card pb-2">
+            <h3 className="text-lg sm:text-xl font-semibold flex items-center gap-2">
               <Bus className="h-5 w-5 text-primary" />
               Route: {route?.name}
             </h3>
-            <p className="text-sm text-gray-500">
+            <p className="text-xs sm:text-sm text-gray-500">
               Shift {route?.shift_number} - Vehicle: {route?.vehicle_number}
             </p>
             {driver && (
-              <div className="mt-2 text-sm">
+              <div className="mt-1 text-xs sm:text-sm">
                 <p>Driver: {driver.name}</p>
                 <p>Contact: {driver.driver_number}</p>
               </div>
@@ -187,88 +188,38 @@ export function BusTracker({ routeId }: BusTrackerProps) {
           </div>
 
           <div className="space-y-2">
-            <div className="flex justify-between text-sm text-gray-500">
+            <div className="flex justify-between text-xs sm:text-sm text-gray-500">
               <span>{stops[0]?.name}</span>
               <span>{stops[stops.length - 1]?.name}</span>
             </div>
             <Progress value={progress} className="h-2" />
           </div>
 
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium flex items-center gap-1">
-                <MapPin className="h-4 w-4" /> Current Location
-              </h4>
-              {route?.status === 'active' ? (
-                <Badge variant="default">Active</Badge>
-              ) : (
-                <Badge variant="outline">Inactive</Badge>
-              )}
-            </div>
-            
-            <div className="bg-muted p-3 rounded-md">
-              {currentStopId ? (
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">Current Stop:</span>
-                    <Badge variant="secondary">
-                      {stops.find(s => s.id === currentStopId)?.name || 'Unknown'}
-                    </Badge>
-                  </div>
-                  
-                  {nextStop && (
-                    <div className="flex justify-between items-center">
-                      <span className="font-medium">Next Stop:</span>
-                      <Badge variant="outline">{nextStop.name}</Badge>
-                    </div>
-                  )}
-                  
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">Last Updated:</span>
-                    <span className="text-xs">
-                      {currentLocation?.last_updated 
-                        ? new Date(currentLocation.last_updated).toLocaleTimeString() 
-                        : currentLocation?.updated_at
-                          ? new Date(currentLocation.updated_at).toLocaleTimeString()
-                          : 'Unknown'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-center text-sm text-gray-500">
-                  Bus tracking not active yet
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h4 className="font-medium flex items-center gap-1">
-              <Clock className="h-4 w-4" /> Stops
-            </h4>
-            <div className="space-y-1">
+          <div className="overflow-x-auto">
+            <div className="min-w-[320px] space-y-1">
               {stops.map((stop) => {
                 const isCurrentStop = stop.id === currentStopId;
                 const isPastStop = stops.findIndex(s => s.id === stop.id) < stops.findIndex(s => s.id === currentStopId);
-                
                 return (
                   <div
                     key={stop.id}
-                    className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
+                    className={`flex items-center justify-between py-2 border-b border-gray-100 last:border-0 ${isCurrentStop ? 'bg-primary/10 dark:bg-primary/20 rounded-lg' : ''}`}
                   >
                     <div className="flex items-center space-x-2">
-                      <div className={`w-3 h-3 rounded-full ${
+                      <div className={`w-4 h-4 rounded-full ${
                         isCurrentStop
                           ? 'bg-primary animate-pulse'
                           : isPastStop
                             ? 'bg-green-500'
                             : 'bg-gray-300'
                       }`} />
-                      <span className={`text-sm ${isCurrentStop ? 'font-medium' : ''}`}>
+                      <span className={`text-sm sm:text-base ${isCurrentStop ? 'font-medium' : ''}`}>
                         {stop.name}
                       </span>
+                      {stop.pickup_time && (
+                        <span className="ml-2 text-xs text-gray-500">{stop.pickup_time}</span>
+                      )}
                     </div>
-                    
                     <StudentCount stopId={stop.id} />
                   </div>
                 );

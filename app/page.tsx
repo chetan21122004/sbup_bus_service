@@ -138,14 +138,14 @@ export default function HomePage() {
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="space-y-6">
+    <div className="w-full max-w-full px-2 py-4 mx-auto sm:px-4">
+      <div className="space-y-4">
         <div className="text-center">
-          <h1 className="text-3xl font-bold">SBUP Bus Tracker</h1>
-          <p className="text-gray-500 mt-2">Select your route to start tracking</p>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">SBUP Bus Tracker</h1>
+          <p className="text-gray-500 mt-1 sm:mt-2 text-base sm:text-lg">Select your route to start tracking</p>
           {user && (
-            <div className="mt-2">
-              <p className="text-sm">Welcome, {user.name} ({user.role})</p>
+            <div className="mt-1 sm:mt-2">
+              <p className="text-xs sm:text-sm">Welcome, {user.name} ({user.role})</p>
             </div>
           )}
         </div>
@@ -158,16 +158,16 @@ export default function HomePage() {
         )}
 
         {!user && (
-          <Card className="mb-6">
-            <CardContent className="p-6">
-              <div className="text-center space-y-4">
-                <p>Please log in to track buses and access all features.</p>
-                <div className="flex justify-center gap-4">
+          <Card className="mb-4 sm:mb-6">
+            <CardContent className="p-4 sm:p-6">
+              <div className="text-center space-y-2 sm:space-y-4">
+                <p className="text-sm sm:text-base">Please log in to track buses and access all features.</p>
+                <div className="flex flex-col sm:flex-row justify-center gap-2 sm:gap-4">
                   <Link href="/login">
-                    <Button>Login</Button>
+                    <Button className="w-full sm:w-auto h-12 text-base">Login</Button>
                   </Link>
                   <Link href="/signup">
-                    <Button variant="outline">Sign Up</Button>
+                    <Button variant="outline" className="w-full sm:w-auto h-12 text-base">Sign Up</Button>
                   </Link>
                 </div>
               </div>
@@ -176,71 +176,52 @@ export default function HomePage() {
         )}
 
         {/* Shift selector */}
-        <div className="flex justify-center mb-6">
-          <div className="flex flex-wrap gap-2 justify-center">
-            {shifts.map((shift) => (
-              <Button
-                key={shift.number}
-                variant={currentShift === shift.number ? "default" : "outline"}
-                onClick={() => handleShiftChange(shift.number)}
-              >
-                Shift {shift.number} ({shift.timing})
-              </Button>
-            ))}
-          </div>
+        <div className="flex flex-wrap justify-center gap-2 mb-4 sm:mb-6">
+          {shifts.map((shift) => (
+            <Button
+              key={shift.number}
+              variant={currentShift === shift.number ? "default" : "outline"}
+              className="h-10 px-4 text-sm sm:text-base rounded-full shadow-sm"
+              onClick={() => handleShiftChange(shift.number)}
+            >
+              Shift {shift.number} ({shift.timing})
+            </Button>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {routes.length === 0 ? (
             <div className="col-span-full text-center py-8">
               <p className="text-gray-500">No routes available for this shift.</p>
             </div>
           ) : (
             routes.map((route: Route) => (
-              <Card key={route.id}>
-                <CardHeader>
-                  <div className="flex justify-between items-center">
-                    <CardTitle>{route.name}</CardTitle>
-                    <Badge variant={route.status === 'active' ? 'default' : 'outline'}>
-                      {route.status === 'active' ? 'Active' : 
-                       route.status === 'completed' ? 'Completed' : 'Inactive'}
-                    </Badge>
-                  </div>
-                  <CardDescription>
-                    Shift {route.shift_number} - {route.vehicle_number || 'No vehicle assigned'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="flex items-center">
-                          <Clock className="h-3 w-3 mr-1" />
-                          Start:
-                        </span>
-                        <span>{route.start_time}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="flex items-center">
-                          <Clock className="h-3 w-3 mr-1" />
-                          Departure:
-                        </span>
-                        <span>{route.departure_time}</span>
-                      </div>
-                      {route.driver_name && (
-                        <div className="flex justify-between text-sm">
-                          <span>Driver:</span>
-                          <span>{route.driver_name}</span>
-                        </div>
-                      )}
+              <Card key={route.id} className="rounded-xl shadow-md border border-gray-200 hover:shadow-lg transition-shadow bg-white dark:bg-card">
+                <CardContent className="p-4 sm:p-6 flex flex-col gap-2">
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2 text-base font-semibold">
+                      <Bus className="h-5 w-5 text-primary" />
+                      {route.name}
                     </div>
-                    <Link href={`/track/${route.id}`}>
-                      <Button className="w-full" disabled={route.status === 'completed'}>
-                        {route.status === 'active' ? 'Track Now' : 
-                         route.status === 'completed' ? 'Trip Completed' : 'View Route'}
-                      </Button>
-                    </Link>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <Clock className="h-4 w-4" /> Start: {route.start_time}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <Clock className="h-4 w-4" /> Departure: {route.departure_time}
+                    </div>
+                    {route.driver_name && (
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span>Driver:</span>
+                        <span className="font-medium">{route.driver_name}</span>
+                      </div>
+                    )}
                   </div>
+                  <Link href={`/track/${route.id}`} className="mt-2">
+                    <Button className="w-full h-11 text-base rounded-lg" disabled={route.status === 'completed'}>
+                      {route.status === 'active' ? 'Track Now' : 
+                        route.status === 'completed' ? 'Trip Completed' : 'View Route'}
+                    </Button>
+                  </Link>
                 </CardContent>
               </Card>
             ))

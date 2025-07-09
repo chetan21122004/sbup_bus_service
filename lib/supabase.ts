@@ -35,6 +35,7 @@ export type Database = {
     route_id: number;
     name: string;
     sequence_number: number;
+    pickup_time?: string;
     created_at: string;
   };
   bus_locations: {
